@@ -1,0 +1,218 @@
+---
+title: "Week 7 - Homework 4: Investment Portfolio Risk Analysis"
+author: "Muhammad Ahmad"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 5)
+library(tidyverse)
+library(knitr)
+```
+
+# Introduction
+
+An investment advisory firm is evaluating three portfolios (A, B, and C) for a risk-sensitive client. Each portfolio is described as a discrete probability distribution over possible returns. In this report I:
+
+1. Compute the expected return, variance, and standard deviation of each portfolio (Part A).
+2. Run a Monte Carlo simulation of 10,000 returns per portfolio, compare the distributions, and estimate the probability of a loss (Part B).
+3. Make a recommendation for conservative, moderate, and aggressive investors (Part C).
+
+# Data
+
+```{r load-data}
+returns <- read_csv("portfolio_returns.csv")
+kable(returns, caption = "Return scenarios and probabilities by portfolio")
+```
+
+Before computing anything, I check that the probabilities for each portfolio form a valid distribution (they must sum to 1).
+
+```{r check-probs}
+returns %>%
+  group_by(Portfolio) %>%
+  summarise(total_probability = sum(Probability)) %>%
+  kable(caption = "Probability totals by portfolio")
+```
+
+Each portfolio's probabilities sum to 1, so each is a valid discrete probability distribution.
+
+# Part A: Statistical Analysis
+
+For a discrete random variable $R$ with outcomes $r_i$ and probabilities $p_i$:
+
+$$E[R] = \sum_i p_i r_i \qquad Var(R) = \sum_i p_i \left(r_i - E[R]\right)^2 \qquad SD(R) = \sqrt{Var(R)}$$
+
+```{r part-a}
+stats <- returns %>%
+  group_by(Portfolio) %>%
+  summarise(
+    Expected_Return = sum(Return * Probability),
+    Variance        = sum(Probability * (Return - Expected_Return)^2),
+    Std_Dev         = sqrt(Variance),
+    Coef_of_Var     = Std_Dev / Expected_Return,
+    .groups = "drop"
+  )
+
+kable(stats, digits = 6,
+      caption = "Theoretical expected return, variance, and standard deviation")
+```
+
+## Interpretation
+
+- **Portfolio A** has the highest expected return (7.5%) but also the highest variance (0.004825) and standard deviation (about 6.95%).
+- **Portfolio B** sits in the middle on both: 6.0% expected return and a standard deviation of about 4.38%.
+- **Portfolio C** has the lowest expected return (5.6%) but by far the lowest variance (0.000564) and standard deviation (about 2.37%).
+
+The coefficient of variation (risk per unit of expected return) is lowest for C (about 0.42), then B (about 0.73), then A (about 0.93). So C delivers the most return per unit of risk, while A delivers the most return in absolute terms.
+
+# Part B: Monte Carlo Simulation
+
+## B1. Simulate 10,000 returns per portfolio
+
+For each portfolio I draw 10,000 returns from its distribution, sampling with replacement using the given probabilities as weights.
+
+```{r part-b-sim}
+set.seed(123)
+n_sims <- 10000
+
+simulate_portfolio <- function(df, n) {
+  sample(df$Return, size = n, replace = TRUE, prob = df$Probability)
+}
+
+sims <- returns %>%
+  group_split(Portfolio) %>%
+  map_dfr(~ tibble(Portfolio = .x$Portfolio[1],
+                   Return = simulate_portfolio(.x, n_sims)))
+
+sim_stats <- sims %>%
+  group_by(Portfolio) %>%
+  summarise(
+    Sim_Mean = mean(Return),
+    Sim_Variance = var(Return),
+    Sim_Std_Dev = sd(Return),
+    Min = min(Return),
+    Max = max(Return),
+    .groups = "drop"
+  )
+
+kable(sim_stats, digits = 5, caption = "Simulated summary statistics (10,000 draws each)")
+```
+
+### Simulation vs. theory
+
+```{r sim-vs-theory}
+comparison <- stats %>%
+  select(Portfolio, Theory_Mean = Expected_Return, Theory_SD = Std_Dev) %>%
+  left_join(sim_stats %>% select(Portfolio, Sim_Mean, Sim_Std_Dev), by = "Portfolio") %>%
+  mutate(Mean_Diff = Sim_Mean - Theory_Mean,
+         SD_Diff   = Sim_Std_Dev - Theory_SD)
+
+kable(comparison, digits = 5, caption = "Theoretical vs. simulated mean and standard deviation")
+```
+
+The simulated means and standard deviations are very close to the theoretical values from Part A, which confirms the simulation is working as intended (law of large numbers).
+
+## B2. Compare the return distributions
+
+```{r part-b-plots}
+# Observed frequency of each return value by portfolio
+ggplot(sims, aes(x = factor(Return), fill = Portfolio)) +
+  geom_bar(aes(y = after_stat(count / n_sims)), position = "dodge") +
+  labs(title = "Simulated Return Distributions by Portfolio",
+       x = "Return", y = "Relative Frequency") +
+  theme_minimal()
+
+# Faceted view
+ggplot(sims, aes(x = Return, fill = Portfolio)) +
+  geom_histogram(aes(y = after_stat(count / n_sims)), bins = 30, color = "white") +
+  facet_wrap(~ Portfolio, ncol = 1) +
+  geom_vline(data = stats, aes(xintercept = Expected_Return),
+             linetype = "dashed") +
+  geom_vline(xintercept = 0, color = "red") +
+  labs(title = "Return Distributions (dashed = expected return, red = 0)",
+       x = "Return", y = "Relative Frequency") +
+  theme_minimal()
+
+# Boxplot comparison
+ggplot(sims, aes(x = Portfolio, y = Return, fill = Portfolio)) +
+  geom_boxplot() +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Return Spread by Portfolio", y = "Return") +
+  theme_minimal()
+```
+
+**Interpretation:** Portfolio A has the widest spread, reaching both the highest gain (15%) and the largest loss (-5%). Portfolio B is narrower, and Portfolio C is tightly clustered near its mean with only a very small downside.
+
+## B3. Probability of a loss
+
+```{r part-b-loss}
+loss_prob <- sims %>%
+  group_by(Portfolio) %>%
+  summarise(Simulated_P_Loss = mean(Return < 0), .groups = "drop") %>%
+  left_join(
+    returns %>%
+      group_by(Portfolio) %>%
+      summarise(Theoretical_P_Loss = sum(Probability[Return < 0]), .groups = "drop"),
+    by = "Portfolio"
+  )
+
+kable(loss_prob, digits = 4, caption = "Probability of a negative return")
+```
+
+The simulated probabilities of loss match the theoretical values: about 20% for A, 20% for B, and 10% for C.
+
+# Part C: Risk Analysis and Investment Recommendation
+
+## Additional risk measures
+
+To go beyond variance, I compute the expected loss given that a loss occurs, the worst-case outcome, and the 5th percentile of simulated returns (a simple Value-at-Risk style measure).
+
+```{r risk-measures}
+risk_table <- sims %>%
+  group_by(Portfolio) %>%
+  summarise(
+    P_Loss = mean(Return < 0),
+    Avg_Loss_Given_Loss = mean(Return[Return < 0]),
+    Worst_Case = min(Return),
+    VaR_5pct = quantile(Return, 0.05),
+    .groups = "drop"
+  ) %>%
+  left_join(stats %>% select(Portfolio, Expected_Return, Std_Dev, Coef_of_Var),
+            by = "Portfolio") %>%
+  select(Portfolio, Expected_Return, Std_Dev, Coef_of_Var,
+         P_Loss, Avg_Loss_Given_Loss, Worst_Case, VaR_5pct)
+
+kable(risk_table, digits = 4, caption = "Summary of return and risk measures")
+```
+
+```{r risk-return-plot}
+ggplot(stats, aes(x = Std_Dev, y = Expected_Return, label = Portfolio, color = Portfolio)) +
+  geom_point(size = 5) +
+  geom_text(vjust = -1.2, show.legend = FALSE) +
+  labs(title = "Risk vs. Return", x = "Standard Deviation (Risk)", y = "Expected Return") +
+  theme_minimal()
+```
+
+## Recommendations
+
+**Conservative investors: Portfolio C.** It has the lowest standard deviation (about 2.4%), the lowest probability of loss (10%), and the mildest worst case (-1%). The cost is the lowest expected return (5.6%), but it has the best return per unit of risk (lowest coefficient of variation).
+
+**Moderate investors: Portfolio B.** It offers a 6.0% expected return with a standard deviation of about 4.4%. It gives up about 1.5 percentage points of expected return relative to A in exchange for roughly 2.5 percentage points less volatility, though its loss probability (20%) is the same as A's. *(Note: B's loss probability is higher than C's, so a moderate investor is accepting more downside than C in exchange for about 0.4 percentage points more expected return.)*
+
+**Aggressive investors: Portfolio A.** It has the highest expected return (7.5%) and the only chance of a 15% gain. Aggressive investors accept the highest volatility (about 6.95%) and the largest possible loss (-5%) in exchange for the highest upside.
+
+## Conclusion
+
+Because the client in the scenario is **risk-sensitive**, Portfolio C is the strongest fit: it has the lowest variance, the lowest chance of a loss, and the smallest worst-case outcome. The numerical evidence shows the usual risk-return trade-off: each step up in expected return (C to B to A) comes with a higher standard deviation.
+
+# Appendix: Session Info
+
+```{r session-info}
+sessionInfo()
+```
