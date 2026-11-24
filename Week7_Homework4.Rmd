@@ -20,14 +20,15 @@ library(knitr)
 
 An investment advisory firm is evaluating three portfolios (A, B, and C) for a risk-sensitive client. Each portfolio is described as a discrete probability distribution over possible returns. In this report I:
 
-1. Compute the expected return, variance, and standard deviation of each portfolio (Part A).
-2. Run a Monte Carlo simulation of 10,000 returns per portfolio, compare the distributions, and estimate the probability of a loss (Part B).
-3. Make a recommendation for conservative, moderate, and aggressive investors (Part C).
+1.  Compute the expected return, variance, and standard deviation of each portfolio (Part A).
+2.  Run a Monte Carlo simulation of 10,000 returns per portfolio, compare the distributions, and estimate the probability of a loss (Part B).
+3.  Make a recommendation for conservative, moderate, and aggressive investors (Part C).
 
 # Data
 
 ```{r load-data}
-returns <- read_csv("portfolio_returns.csv")
+url <- "https://raw.githubusercontent.com/MuhammadAhmad0006/DATA605_Homework-4/refs/heads/main/portfolio_returns.csv"
+returns <- read_csv(url)
 kable(returns, caption = "Return scenarios and probabilities by portfolio")
 ```
 
@@ -210,9 +211,3 @@ ggplot(stats, aes(x = Std_Dev, y = Expected_Return, label = Portfolio, color = P
 ## Conclusion
 
 Because the client in the scenario is **risk-sensitive**, Portfolio C is the strongest fit: it has the lowest variance, the lowest chance of a loss, and the smallest worst-case outcome. The numerical evidence shows the usual risk-return trade-off: each step up in expected return (C to B to A) comes with a higher standard deviation.
-
-# Appendix: Session Info
-
-```{r session-info}
-sessionInfo()
-```
